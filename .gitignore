@@ -1,4 +1,15 @@
-/venv
-/__pycache__
+## Python caches
+__pycache__/
+*.py[cod]
 
+## Virtual environments
+venv/
+.venv/
+
+## Local secrets
 .env
+.env.*
+
+## Runtime/local data
+*.db
+agent.log
