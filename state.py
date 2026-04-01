@@ -53,12 +53,15 @@ def bulk_mark_seen(jobs_raw: List[Dict]):
     """On first run, silently swallow all existing jobs so we don't spam."""
     with sqlite3.connect(DB_PATH) as conn:
         for job in jobs_raw:
+            job_id = job.get("id")
+            if job_id is None:
+                continue
             company = job.get("company", {}).get("name", "Unknown").strip()
             title   = job.get("title", "Unknown").strip()
             conn.execute(
                 "INSERT OR IGNORE INTO seen_jobs (job_id, title, company, eligible) "
                 "VALUES (?, ?, ?, ?)",
-                (job["id"], title, company, int(job.get("eligible", False))),
+                (job_id, title, company, int(job.get("eligible", False))),
             )
         conn.commit()
     logger.info(f"First run: bulk-marked {len(jobs_raw)} existing jobs as seen.")
