@@ -13,6 +13,7 @@ from config import (
     SERVICE,
     ELIGIBLE_ONLY,
     API_TIMEOUT_SECONDS,
+    DETAIL_FETCH_TIMEOUT_SECONDS,
     JOB_DESCRIPTION_MAX_LEN,
 )
 
@@ -120,7 +121,7 @@ def fetch_job_details(job_id: int) -> Optional[Dict]:
         resp = HTTP.get(
             f"{API_URL}/{job_id}",
             headers=_headers(),
-            timeout=API_TIMEOUT_SECONDS,
+            timeout=DETAIL_FETCH_TIMEOUT_SECONDS,
         )
 
         if resp.status_code in (401, 403):
