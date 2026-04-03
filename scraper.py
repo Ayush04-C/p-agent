@@ -1,11 +1,16 @@
 import requests
 import logging
 import re
+import os
+import time
+import json
+import base64
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta, timezone
 from html import unescape
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from dotenv import dotenv_values
 from config import (
     BEARER_TOKEN,
     YEAR,
@@ -20,6 +25,7 @@ from config import (
 logger = logging.getLogger(__name__)
 
 API_URL    = "https://campus.placements.iitb.ac.in/api/v1/job"
+AUTH_SLT_URL = "https://campus.placements.iitb.ac.in/api/v1/auth/slt"
 PORTAL_URL = "https://campus.placements.iitb.ac.in/applicant/jobs"
 IST_TZ = timezone(timedelta(hours=5, minutes=30))
 
@@ -42,11 +48,95 @@ def _build_session() -> requests.Session:
 
 
 HTTP = _build_session()
+_AUTH_TOKEN = (BEARER_TOKEN or "").strip()
 
 
-def _headers() -> Dict[str, str]:
-    return {
-        "Authorization": f"Bearer {BEARER_TOKEN}",
+def _jwt_seconds_left(token: str) -> int:
+    try:
+        payload_part = token.split(".")[1]
+        payload_part += "=" * (-len(payload_part) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_part.encode("utf-8")))
+        exp = int(payload.get("exp", 0))
+        return exp - int(time.time())
+    except Exception:
+        return 0
+
+
+def _load_env_bearer_token() -> str:
+    env_token = os.getenv("BEARER_TOKEN", "").strip()
+    if env_token:
+        return env_token
+
+    try:
+        file_token = (dotenv_values(".env").get("BEARER_TOKEN") or "").strip()
+        return file_token
+    except Exception:
+        return ""
+
+
+def _try_refresh_token() -> bool:
+    global _AUTH_TOKEN
+
+    if not _AUTH_TOKEN:
+        _AUTH_TOKEN = _load_env_bearer_token()
+    if not _AUTH_TOKEN:
+        return False
+
+    try:
+        resp = HTTP.get(
+            AUTH_SLT_URL,
+            headers={
+                "Authorization": f"Bearer {_AUTH_TOKEN}",
+                "Accept": "application/json, text/plain, */*",
+                "Referer": PORTAL_URL,
+            },
+            timeout=DETAIL_FETCH_TIMEOUT_SECONDS,
+        )
+
+        if resp.status_code in (401, 403):
+            seed = _load_env_bearer_token()
+            if seed and seed != _AUTH_TOKEN:
+                _AUTH_TOKEN = seed
+                resp = HTTP.get(
+                    AUTH_SLT_URL,
+                    headers={
+                        "Authorization": f"Bearer {_AUTH_TOKEN}",
+                        "Accept": "application/json, text/plain, */*",
+                        "Referer": PORTAL_URL,
+                    },
+                    timeout=DETAIL_FETCH_TIMEOUT_SECONDS,
+                )
+
+        resp.raise_for_status()
+        data = resp.json()
+        new_token = (data.get("access_token") or "").strip() if isinstance(data, dict) else ""
+        if not new_token:
+            return False
+
+        _AUTH_TOKEN = new_token
+        return True
+    except Exception:
+        return False
+
+
+def _get_auth_token(force_refresh: bool = False) -> str:
+    global _AUTH_TOKEN
+
+    if not _AUTH_TOKEN:
+        _AUTH_TOKEN = _load_env_bearer_token()
+
+    if not _AUTH_TOKEN:
+        return ""
+
+    if force_refresh or _jwt_seconds_left(_AUTH_TOKEN) <= 20:
+        _try_refresh_token()
+
+    return _AUTH_TOKEN
+
+
+def _headers(force_refresh: bool = False) -> Dict[str, str]:
+    token = _get_auth_token(force_refresh=force_refresh)
+    headers = {
         "Accept": "application/json, text/plain, */*",
         "Referer": PORTAL_URL,
         "User-Agent": (
@@ -55,6 +145,9 @@ def _headers() -> Dict[str, str]:
             "Version/18.5 Mobile/15E148 Safari/604.1"
         ),
     }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def _fmt_time(iso: str) -> str:
@@ -120,7 +213,7 @@ def fetch_job_details(job_id: int) -> Optional[Dict]:
     try:
         resp = HTTP.get(
             f"{API_URL}/{job_id}",
-            headers=_headers(),
+            headers=_headers(force_refresh=True),
             timeout=DETAIL_FETCH_TIMEOUT_SECONDS,
         )
 
@@ -155,16 +248,27 @@ def fetch_jobs() -> Optional[List[Dict]]:
     try:
         resp = HTTP.get(
             API_URL,
-            headers=_headers(),
+            headers=_headers(force_refresh=True),
             params=params,
             timeout=API_TIMEOUT_SECONDS,
         )
 
         if resp.status_code == 401:
-            logger.error("TOKEN EXPIRED — paste a fresh Bearer token into .env")
+            _try_refresh_token()
+            resp = HTTP.get(
+                API_URL,
+                headers=_headers(force_refresh=False),
+                params=params,
+                timeout=API_TIMEOUT_SECONDS,
+            )
+
+        if resp.status_code == 401:
+            logger.error(
+                "Authentication failed. Update BEARER_TOKEN in .env once to re-bootstrap token refresh."
+            )
             return None
         if resp.status_code == 403:
-            logger.error("FORBIDDEN — session may have been invalidated")
+            logger.error("FORBIDDEN — session may have been invalidated. Update BEARER_TOKEN in .env.")
             return None
 
         if resp.status_code >= 500:
