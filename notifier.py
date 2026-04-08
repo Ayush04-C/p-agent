@@ -46,6 +46,7 @@ def send_telegram(job: dict) -> bool:
     eligible = bool(job.get("eligible", False))
     cpi = job.get("cpi", 0)
     tags_line = ", ".join(job.get("tags", [])) if job.get("tags") else "N/A"
+    stipend_value = job.get("stipend", "Not specified")
 
     company = _as_html_text(job.get("company", "Unknown Company"))
     title = _as_html_text(job.get("title", "Unknown Role"))
@@ -67,6 +68,12 @@ def send_telegram(job: dict) -> bool:
         else "📊 No CPI cutoff"
     )
 
+    stipend_line = (
+        f"💰 <b>Stipend:</b> <code>{_as_html_text(stipend_value)}</code>"
+        if stipend_value and str(stipend_value).strip() and str(stipend_value).strip() != "Not specified"
+        else "💰 <b>Stipend:</b> Not specified"
+    )
+
     opens_at = _as_html_text(job.get("opens_at", "Unknown"))
     closes_at = _as_html_text(job.get("closes_at", "Unknown"))
     portal_url = job.get("url", "https://campus.placements.iitb.ac.in/applicant/jobs")
@@ -79,6 +86,7 @@ def send_telegram(job: dict) -> bool:
         f"📌 <b>Role:</b> {title}\n\n"
         f"{eligible_line}\n"
         f"{cpi_line}\n"
+        f"{stipend_line}\n"
         f"🏷️ <b>Type:</b> {tags}\n\n"
         f"📝 <b>Description:</b>\n{description}\n\n"
         f"📅 <b>Opens:</b> {opens_at}\n"
@@ -98,6 +106,7 @@ def send_telegram(job: dict) -> bool:
             f"📌 <b>Role:</b> {title}\n\n"
             f"{eligible_line}\n"
             f"{cpi_line}\n"
+            f"{stipend_line}\n"
             f"🏷️ <b>Type:</b> {tags}\n\n"
             f"📝 <b>Description:</b>\n{description}\n\n"
             f"📅 <b>Opens:</b> {opens_at}\n"

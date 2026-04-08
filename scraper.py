@@ -5,7 +5,7 @@ import os
 import time
 import json
 import base64
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from datetime import datetime, timedelta, timezone
 from html import unescape
 from requests.adapters import HTTPAdapter
@@ -209,6 +209,72 @@ def _extract_description(job: Dict) -> str:
     return "Description not available."
 
 
+def _normalize_stipend_value(value: Any) -> str:
+    if value is None:
+        return ""
+
+    if isinstance(value, (int, float)):
+        if value <= 0:
+            return ""
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        return str(value)
+
+    if isinstance(value, str):
+        return re.sub(r"\s+", " ", value).strip()
+
+    if isinstance(value, dict):
+        for key in ("text", "display", "label", "value", "amount", "monthly", "stipend"):
+            parsed = _normalize_stipend_value(value.get(key))
+            if parsed:
+                return parsed
+
+        minimum = value.get("min", value.get("minimum"))
+        maximum = value.get("max", value.get("maximum"))
+        currency = _normalize_stipend_value(value.get("currency"))
+        period = _normalize_stipend_value(value.get("period"))
+
+        min_text = _normalize_stipend_value(minimum)
+        max_text = _normalize_stipend_value(maximum)
+        if min_text or max_text:
+            base = f"{min_text}-{max_text}" if min_text and max_text else (min_text or max_text)
+            if currency:
+                base = f"{currency} {base}"
+            if period:
+                base = f"{base} / {period}"
+            return base
+
+        return ""
+
+    if isinstance(value, list):
+        parts = [_normalize_stipend_value(v) for v in value]
+        parts = [p for p in parts if p]
+        return ", ".join(parts)
+
+    return ""
+
+
+def _extract_stipend(job: Dict) -> str:
+    possible_values = [
+        job.get("stipend"),
+        job.get("stipendAmount"),
+        job.get("stipendValue"),
+        job.get("monthlyStipend"),
+        job.get("salary"),
+        job.get("compensation"),
+        job.get("package"),
+        job.get("ctc"),
+        job.get("pay"),
+    ]
+
+    for value in possible_values:
+        stipend = _normalize_stipend_value(value)
+        if stipend:
+            return stipend
+
+    return "Not specified"
+
+
 def fetch_job_details(job_id: int) -> Optional[Dict]:
     try:
         resp = HTTP.get(
@@ -306,6 +372,7 @@ def extract_job_info(job: Dict, fetch_full_description: bool = False) -> Dict:
     cpi     = job.get("cpiCutoff", 0)
     job_id  = job.get("id")
     description = _extract_description(job)
+    stipend = _extract_stipend(job)
 
     if fetch_full_description and job_id:
         detail = fetch_job_details(job_id)
@@ -313,6 +380,9 @@ def extract_job_info(job: Dict, fetch_full_description: bool = False) -> Dict:
             detail_description = _extract_description(detail)
             if detail_description != "Description not available.":
                 description = detail_description
+            detail_stipend = _extract_stipend(detail)
+            if detail_stipend != "Not specified":
+                stipend = detail_stipend
 
     return {
         "id":        job_id,
@@ -320,6 +390,7 @@ def extract_job_info(job: Dict, fetch_full_description: bool = False) -> Dict:
         "company":   company.get("name", "Unknown Company").strip(),
         "eligible":  job.get("eligible", False),
         "cpi":       cpi,
+        "stipend":   stipend,
         "tags":      tags,
         "description": description,
         "opens_at":  _fmt_time(job.get("opensAt", "")),
